@@ -1,0 +1,72 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model EmailAccount {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  accessToken String?
+  refreshToken String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  events      EmailEvent[]
+}
+
+model Campaign {
+  id          String   @id @default(cuid())
+  name        String
+  status      String   @default("active") // active, paused, completed
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  leads       Lead[]
+  events      EmailEvent[]
+}
+
+model Lead {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  name        String?
+  company     String?
+  status      String   @default("cold") // cold, interested, booked, not_interested
+  campaignId  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  campaign    Campaign? @relation(fields: [campaignId], references: [id])
+  events      EmailEvent[]
+}
+
+model EmailEvent {
+  id          String   @id @default(cuid())
+  messageId   String?  @unique
+  type        String   // sent, delivered, opened, replied, bounced
+  subject     String?
+  snippet     String?
+  leadId      String?
+  campaignId  String?
+  accountId   String?
+  createdAt   DateTime @default(now())
+
+  lead        Lead?     @relation(fields: [leadId], references: [id])
+  campaign    Campaign? @relation(fields: [campaignId], references: [id])
+  account     EmailAccount? @relation(fields: [accountId], references: [id])
+}
+
+model ApiUsage {
+  id          String   @id @default(cuid())
+  model       String   // e.g. gemini-1.5-pro
+  tokens      Int
+  cost        Float
+  source      String   // e.g. n8n, Python script
+  createdAt   DateTime @default(now())
+}
