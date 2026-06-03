@@ -97,6 +97,17 @@ export async function GET() {
         
         // STRICT FILTER: Only save if it's an actual campaign email
         if (messageIdHeader && campaignIdHeader) {
+          // Auto-create the Campaign if it doesn't exist yet
+          // We use name as a unique slug since n8n sends names not DB IDs
+          const campaign = await prisma.campaign.upsert({
+            where: { name: campaignIdHeader },
+            update: {},
+            create: {
+              name: campaignIdHeader,
+              status: 'active',
+            }
+          });
+
           await prisma.emailEvent.upsert({
             where: { messageId: messageIdHeader },
             update: {},
@@ -105,7 +116,7 @@ export async function GET() {
               type: 'sent',
               subject: headers?.find(h => h.name?.toLowerCase() === 'subject')?.value || '',
               snippet: fullMsg.data.snippet || '',
-              campaignId: campaignIdHeader,
+              campaignId: campaign.id,
               accountId: account.id
             }
           });
