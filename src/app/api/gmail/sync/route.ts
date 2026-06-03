@@ -129,20 +129,31 @@ export async function GET() {
         if (!msg.id) continue;
         const fullMsg = await gmail.users.messages.get({ userId: 'me', id: msg.id });
         const headers = fullMsg.data.payload?.headers;
-        
+
         const messageIdHeader = headers?.find(h => h.name?.toLowerCase() === 'message-id')?.value;
         const inReplyToHeader = headers?.find(h => h.name?.toLowerCase() === 'in-reply-to')?.value;
-        
-        // Basic bounce detection logic
         const fromHeader = headers?.find(h => h.name?.toLowerCase() === 'from')?.value || '';
-        const isBounce = fromHeader.toLowerCase().includes('mailer-daemon') || fromHeader.toLowerCase().includes('postmaster');
-        
-        // STRICT FILTER: Only save if it's a direct reply to an email we sent
-        if (messageIdHeader && inReplyToHeader) {
+        const subjectHeader = headers?.find(h => h.name?.toLowerCase() === 'subject')?.value || '';
+
+        // Detect bounce emails from Gmail delivery system
+        const isBounce = 
+          fromHeader.toLowerCase().includes('mailer-daemon') ||
+          fromHeader.toLowerCase().includes('postmaster') ||
+          fromHeader.toLowerCase().includes('mail delivery') ||
+          subjectHeader.toLowerCase().includes('delivery status notification') ||
+          subjectHeader.toLowerCase().includes('delivery failure') ||
+          subjectHeader.toLowerCase().includes('undeliverable') ||
+          subjectHeader.toLowerCase().includes('mail delivery failed') ||
+          subjectHeader.toLowerCase().includes('returned mail');
+
+        if (!messageIdHeader) continue;
+
+        // CASE 1: Bounce/Reply that links back to a sent email we already have in DB
+        if (inReplyToHeader) {
           const originalEmail = await prisma.emailEvent.findUnique({
             where: { messageId: inReplyToHeader }
           });
-          
+
           if (originalEmail) {
             await prisma.emailEvent.upsert({
               where: { messageId: messageIdHeader },
@@ -150,14 +161,52 @@ export async function GET() {
               create: {
                 messageId: messageIdHeader,
                 type: isBounce ? 'bounced' : 'replied',
-                subject: headers?.find(h => h.name?.toLowerCase() === 'subject')?.value || '',
+                subject: subjectHeader,
                 snippet: fullMsg.data.snippet || '',
                 accountId: account.id,
-                campaignId: originalEmail.campaignId // Link directly to original campaign
+                campaignId: originalEmail.campaignId,
               }
             });
             totalSynced++;
+            continue;
           }
+        }
+
+        // CASE 2: Standalone bounce from mailer-daemon (no matching sent email yet)
+        // Still track it — link to the campaign if we can find it from the body
+        if (isBounce) {
+          const bodyText = fullMsg.data.payload ? getEmailBody(fullMsg.data.payload) : '';
+          const campaignMatch = bodyText.match(/campaign_id:([a-zA-Z0-9-]+)/i);
+
+          let campaignId: string | null = null;
+          if (campaignMatch && campaignMatch[1]) {
+            const campaign = await prisma.campaign.upsert({
+              where: { name: campaignMatch[1] },
+              update: {},
+              create: { name: campaignMatch[1], status: 'active' }
+            });
+            campaignId = campaign.id;
+          } else {
+            // Try to find the most recent active campaign as fallback
+            const latestCampaign = await prisma.campaign.findFirst({
+              orderBy: { createdAt: 'desc' }
+            });
+            campaignId = latestCampaign?.id || null;
+          }
+
+          await prisma.emailEvent.upsert({
+            where: { messageId: messageIdHeader },
+            update: {},
+            create: {
+              messageId: messageIdHeader,
+              type: 'bounced',
+              subject: subjectHeader,
+              snippet: fullMsg.data.snippet || '',
+              accountId: account.id,
+              campaignId,
+            }
+          });
+          totalSynced++;
         }
       }
     }
