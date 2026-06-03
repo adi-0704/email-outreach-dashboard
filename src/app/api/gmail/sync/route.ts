@@ -5,23 +5,28 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 function getEmailBody(payload: any): string {
+  let bodyStr = '';
+  
   if (payload.parts) {
     for (const part of payload.parts) {
       if (part.mimeType === 'text/html' && part.body?.data) {
+        // HTML is exactly what we want, return it immediately
         return Buffer.from(part.body.data, 'base64url').toString('utf-8');
       }
       if (part.mimeType === 'text/plain' && part.body?.data) {
-        return Buffer.from(part.body.data, 'base64url').toString('utf-8');
+        // Save plain text just in case, but keep looping to see if HTML exists
+        bodyStr = Buffer.from(part.body.data, 'base64url').toString('utf-8');
       }
       if (part.parts) {
         const nestedBody = getEmailBody(part);
-        if (nestedBody) return nestedBody;
+        if (nestedBody) return nestedBody; // Nested HTML found
       }
     }
   } else if (payload.body?.data) {
     return Buffer.from(payload.body.data, 'base64url').toString('utf-8');
   }
-  return '';
+  
+  return bodyStr;
 }
 
 export async function GET() {
