@@ -1,23 +1,15 @@
 import { PrismaClient } from "@prisma/client";
-import { Send, Users, ShieldAlert, BarChart3 } from "lucide-react";
 
 const prisma = new PrismaClient();
 export const revalidate = 0;
 
 export default async function CampaignsPage() {
-  const events = await prisma.emailEvent.findMany();
-  
-  // Group by campaignId
-  const campaigns: Record<string, { sent: number, replied: number, bounced: number }> = {};
-  
-  events.forEach(event => {
-    const cid = event.campaignId || "Unknown Campaign";
-    if (!campaigns[cid]) {
-      campaigns[cid] = { sent: 0, replied: 0, bounced: 0 };
-    }
-    if (event.type === 'sent') campaigns[cid].sent++;
-    if (event.type === 'replied') campaigns[cid].replied++;
-    if (event.type === 'bounced') campaigns[cid].bounced++;
+  // Fetch all campaigns with their related email events
+  const campaigns = await prisma.campaign.findMany({
+    include: {
+      events: true,
+    },
+    orderBy: { createdAt: 'desc' },
   });
 
   return (
@@ -41,24 +33,36 @@ export default async function CampaignsPage() {
               </tr>
             </thead>
             <tbody>
-              {Object.keys(campaigns).length === 0 ? (
+              {campaigns.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
                     No campaigns found. Start syncing your emails!
                   </td>
                 </tr>
               ) : (
-                Object.entries(campaigns).map(([name, stats]) => {
-                  const replyRate = stats.sent > 0 ? ((stats.replied / stats.sent) * 100).toFixed(1) : "0.0";
+                campaigns.map((campaign) => {
+                  const sent = campaign.events.filter(e => e.type === 'sent').length;
+                  const replied = campaign.events.filter(e => e.type === 'replied').length;
+                  const bounced = campaign.events.filter(e => e.type === 'bounced').length;
+                  const replyRate = sent > 0 ? ((replied / sent) * 100).toFixed(1) : "0.0";
+                  
                   return (
-                    <tr key={name} className="border-b border-white/5 hover:bg-white/5">
-                      <td className="px-4 py-4 font-medium text-white">{name}</td>
-                      <td className="px-4 py-4">
-                        <span className="px-2 py-1 rounded text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Active</span>
+                    <tr key={campaign.id} className="border-b border-white/5 hover:bg-white/5">
+                      <td className="px-4 py-4 font-medium text-white capitalize">
+                        {campaign.name.replace(/-/g, ' ')}
                       </td>
-                      <td className="px-4 py-4">{stats.sent}</td>
-                      <td className="px-4 py-4 text-emerald-400">{stats.replied}</td>
-                      <td className="px-4 py-4 text-rose-400">{stats.bounced}</td>
+                      <td className="px-4 py-4">
+                        <span className={`px-2 py-1 rounded text-xs border ${
+                          campaign.status === 'active'
+                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                            : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                        }`}>
+                          {campaign.status.charAt(0).toUpperCase() + campaign.status.slice(1)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4">{sent}</td>
+                      <td className="px-4 py-4 text-emerald-400">{replied}</td>
+                      <td className="px-4 py-4 text-rose-400">{bounced}</td>
                       <td className="px-4 py-4 text-blue-400">{replyRate}%</td>
                     </tr>
                   );

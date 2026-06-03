@@ -31,6 +31,40 @@ export default async function Dashboard() {
     take: 5
   });
 
+  // Build last 7 days chart data from real events
+  const last7Days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    return d;
+  });
+
+  const chartData = await Promise.all(last7Days.map(async (day) => {
+    const start = new Date(day);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(day);
+    end.setHours(23, 59, 59, 999);
+
+    const sent = await prisma.emailEvent.count({
+      where: { type: 'sent', createdAt: { gte: start, lte: end } }
+    });
+    const replied = await prisma.emailEvent.count({
+      where: { type: 'replied', createdAt: { gte: start, lte: end } }
+    });
+
+    return {
+      date: day.toLocaleDateString('en-US', { weekday: 'short' }),
+      sent,
+      replied,
+    };
+  }));
+
+  // Fetch real campaigns for the campaign table
+  const campaigns = await prisma.campaign.findMany({
+    include: { events: true },
+    orderBy: { createdAt: 'desc' },
+    take: 5,
+  });
+
   return (
     <div className="p-8 pb-20 sm:p-12">
       <header className="mb-10 flex items-center justify-between">
@@ -84,7 +118,7 @@ export default async function Dashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         <div className="lg:col-span-2">
-          <OverviewChart />
+          <OverviewChart data={chartData} />
         </div>
         
         <div className="glass-card p-6 flex flex-col gap-4">
@@ -109,7 +143,7 @@ export default async function Dashboard() {
         </div>
       </div>
 
-      {/* Campaign Breakdown Table */}
+      {/* Campaign Breakdown Table - Real Data */}
       <div className="glass-card p-6">
         <h3 className="font-semibold text-lg text-white mb-6">Campaign Performance</h3>
         <div className="overflow-x-auto">
@@ -120,28 +154,37 @@ export default async function Dashboard() {
                 <th className="px-4 py-3 font-medium">Sent</th>
                 <th className="px-4 py-3 font-medium">Replied</th>
                 <th className="px-4 py-3 font-medium">Bounced</th>
+                <th className="px-4 py-3 font-medium">Reply Rate</th>
               </tr>
             </thead>
             <tbody>
-              {/* Fetching and grouping campaigns could be optimized with Prisma's groupBy, but for simplicity here we just use Prisma raw or fetch events and process. */}
-              {/* As a quick view, we will just show a placeholder row if no campaigns are detected yet */}
-              <tr className="border-b border-white/5 hover:bg-white/5">
-                <td className="px-4 py-4 font-medium text-white">Example: wisowl-q3-outreach</td>
-                <td className="px-4 py-4">0</td>
-                <td className="px-4 py-4 text-emerald-400">0</td>
-                <td className="px-4 py-4 text-rose-400">0</td>
-              </tr>
-              <tr className="border-b border-white/5 hover:bg-white/5">
-                <td className="px-4 py-4 font-medium text-white">Example: madhav-production</td>
-                <td className="px-4 py-4">0</td>
-                <td className="px-4 py-4 text-emerald-400">0</td>
-                <td className="px-4 py-4 text-rose-400">0</td>
-              </tr>
+              {campaigns.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                    No campaign data yet. Sync your emails to get started!
+                  </td>
+                </tr>
+              ) : (
+                campaigns.map((campaign) => {
+                  const sent = campaign.events.filter(e => e.type === 'sent').length;
+                  const replied = campaign.events.filter(e => e.type === 'replied').length;
+                  const bounced = campaign.events.filter(e => e.type === 'bounced').length;
+                  const replyRate = sent > 0 ? ((replied / sent) * 100).toFixed(1) : "0.0";
+                  return (
+                    <tr key={campaign.id} className="border-b border-white/5 hover:bg-white/5">
+                      <td className="px-4 py-4 font-medium text-white capitalize">
+                        {campaign.name.replace(/-/g, ' ')}
+                      </td>
+                      <td className="px-4 py-4">{sent}</td>
+                      <td className="px-4 py-4 text-emerald-400">{replied}</td>
+                      <td className="px-4 py-4 text-rose-400">{bounced}</td>
+                      <td className="px-4 py-4 text-blue-400">{replyRate}%</td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
-          <p className="text-xs text-muted-foreground mt-4 italic">
-            * Once the sync engine detects live campaign tags, they will populate here automatically.
-          </p>
         </div>
       </div>
     </div>
