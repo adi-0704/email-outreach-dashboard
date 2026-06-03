@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { PrismaClient } from '@prisma/client';
+import { Buffer } from 'buffer';
 
 const prisma = new PrismaClient();
 
@@ -11,11 +12,11 @@ function getEmailBody(payload: any): string {
     for (const part of payload.parts) {
       if (part.mimeType === 'text/html' && part.body?.data) {
         // HTML is exactly what we want, return it immediately
-        return Buffer.from(part.body.data, 'base64url').toString('utf-8');
+        return Buffer.from(part.body.data, 'base64').toString('utf-8'); // Using standard base64 for better compatibility
       }
       if (part.mimeType === 'text/plain' && part.body?.data) {
         // Save plain text just in case, but keep looping to see if HTML exists
-        bodyStr = Buffer.from(part.body.data, 'base64url').toString('utf-8');
+        bodyStr = Buffer.from(part.body.data, 'base64').toString('utf-8');
       }
       if (part.parts) {
         const nestedBody = getEmailBody(part);
@@ -23,7 +24,7 @@ function getEmailBody(payload: any): string {
       }
     }
   } else if (payload.body?.data) {
-    return Buffer.from(payload.body.data, 'base64url').toString('utf-8');
+    return Buffer.from(payload.body.data, 'base64').toString('utf-8');
   }
   
   return bodyStr;
@@ -152,8 +153,8 @@ export async function GET() {
 
     return NextResponse.json({ success: true, syncedEvents: totalSynced });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Gmail sync error:', error);
-    return NextResponse.json({ error: 'Failed to sync Gmail data' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to sync Gmail data', details: error.message }, { status: 500 });
   }
 }
