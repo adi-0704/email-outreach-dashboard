@@ -17,7 +17,10 @@ function decodeHtmlEntities(text: string): string {
 
 export default async function DeliverabilityPage() {
   const bounces = await prisma.emailEvent.findMany({
-    where: { type: 'bounced' },
+    where: { 
+      type: 'bounced',
+      campaignId: { not: null }, // Only show bounces linked to a known campaign
+    },
     orderBy: { createdAt: 'desc' },
     include: { campaign: true },
   });

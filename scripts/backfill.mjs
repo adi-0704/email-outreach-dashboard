@@ -144,7 +144,7 @@ async function runBackfill() {
       if (processed % 50 === 0) console.log(`  ... ${processed}/${allSentMessages.length} processed`);
     }
 
-    console.log('\n  Checking inbox for replies...');
+    console.log('\n  Checking inbox for replies and bounces...');
     let inboxPageToken = undefined;
     const allInboxMessages = [];
     do {
@@ -159,33 +159,90 @@ async function runBackfill() {
       inboxPageToken = inboxRes.data.nextPageToken;
     } while (inboxPageToken);
 
+    console.log(`  Found ${allInboxMessages.length} inbox messages to check...`);
+
     for (const msg of allInboxMessages) {
       if (!msg.id) continue;
+
+      // Skip if already stored
       const fullMsg = await gmail.users.messages.get({ userId: 'me', id: msg.id });
       const headers = fullMsg.data.payload?.headers;
       const messageIdHeader = headers?.find(h => h.name?.toLowerCase() === 'message-id')?.value;
-      const inReplyToHeader = headers?.find(h => h.name?.toLowerCase() === 'in-reply-to')?.value;
 
-      if (messageIdHeader && inReplyToHeader) {
+      if (messageIdHeader) {
+        const existing = await prisma.emailEvent.findUnique({ where: { messageId: messageIdHeader } });
+        if (existing) continue;
+      } else { continue; }
+
+      const inReplyToHeader = headers?.find(h => h.name?.toLowerCase() === 'in-reply-to')?.value;
+      const fromHeader = headers?.find(h => h.name?.toLowerCase() === 'from')?.value || '';
+      const subjectHeader = headers?.find(h => h.name?.toLowerCase() === 'subject')?.value || '';
+
+      // Comprehensive bounce detection
+      const isBounce =
+        fromHeader.toLowerCase().includes('mailer-daemon') ||
+        fromHeader.toLowerCase().includes('postmaster') ||
+        fromHeader.toLowerCase().includes('mail delivery') ||
+        subjectHeader.toLowerCase().includes('delivery status notification') ||
+        subjectHeader.toLowerCase().includes('delivery failure') ||
+        subjectHeader.toLowerCase().includes('undeliverable') ||
+        subjectHeader.toLowerCase().includes('mail delivery failed') ||
+        subjectHeader.toLowerCase().includes('returned mail');
+
+      // CASE 1: Linked to a sent email already in DB
+      if (inReplyToHeader) {
         const originalEmail = await prisma.emailEvent.findUnique({ where: { messageId: inReplyToHeader } });
         if (originalEmail) {
-          const fromHeader = headers?.find(h => h.name?.toLowerCase() === 'from')?.value || '';
-          const isBounce = fromHeader.toLowerCase().includes('mailer-daemon') || fromHeader.toLowerCase().includes('postmaster');
           await prisma.emailEvent.upsert({
             where: { messageId: messageIdHeader },
             update: {},
             create: {
               messageId: messageIdHeader,
               type: isBounce ? 'bounced' : 'replied',
-              subject: headers?.find(h => h.name?.toLowerCase() === 'subject')?.value || '',
+              subject: subjectHeader,
               snippet: fullMsg.data.snippet || '',
               accountId: account.id,
               campaignId: originalEmail.campaignId,
             }
           });
           totalSynced++;
-          console.log(`    💬 Reply saved: ${headers?.find(h => h.name?.toLowerCase() === 'subject')?.value || 'No Subject'}`);
+          console.log(`    ${isBounce ? '🔴 Bounce' : '💬 Reply'} saved: ${subjectHeader}`);
+          continue;
         }
+      }
+
+      // CASE 2: Standalone bounce — no matching sent email needed
+      if (isBounce) {
+        const bodyText = fullMsg.data.payload ? getEmailBody(fullMsg.data.payload) : '';
+        const campaignMatch = bodyText.match(/campaign_id:([a-zA-Z0-9-]+)/i);
+
+        let campaignId = null;
+        if (campaignMatch && campaignMatch[1]) {
+          const campaign = await prisma.campaign.upsert({
+            where: { name: campaignMatch[1] },
+            update: {},
+            create: { name: campaignMatch[1], status: 'active' }
+          });
+          campaignId = campaign.id;
+        } else {
+          const latestCampaign = await prisma.campaign.findFirst({ orderBy: { createdAt: 'desc' } });
+          campaignId = latestCampaign?.id || null;
+        }
+
+        await prisma.emailEvent.upsert({
+          where: { messageId: messageIdHeader },
+          update: {},
+          create: {
+            messageId: messageIdHeader,
+            type: 'bounced',
+            subject: subjectHeader,
+            snippet: fullMsg.data.snippet || '',
+            accountId: account.id,
+            campaignId,
+          }
+        });
+        totalSynced++;
+        console.log(`    🔴 Standalone bounce saved: ${subjectHeader}`);
       }
     }
   }

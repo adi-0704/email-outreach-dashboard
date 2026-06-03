@@ -12,7 +12,9 @@ export default async function Dashboard() {
   // Fetch real data from Prisma
   const totalSent = await prisma.emailEvent.count({ where: { type: 'sent' } });
   const totalReplies = await prisma.emailEvent.count({ where: { type: 'replied' } });
-  const totalBounces = await prisma.emailEvent.count({ where: { type: 'bounced' } });
+  const totalBounces = await prisma.emailEvent.count({ 
+    where: { type: 'bounced', campaignId: { not: null } } // Only campaign-linked bounces
+  });
   
   // Aggregate API Costs
   const apiUsage = await prisma.apiUsage.aggregate({

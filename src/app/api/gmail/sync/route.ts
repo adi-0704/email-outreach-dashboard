@@ -173,7 +173,7 @@ export async function GET() {
         }
 
         // CASE 2: Standalone bounce from mailer-daemon (no matching sent email yet)
-        // Still track it — link to the campaign if we can find it from the body
+        // Only link to a campaign if we can find the campaign_id tag in the bounce body
         if (isBounce) {
           const bodyText = fullMsg.data.payload ? getEmailBody(fullMsg.data.payload) : '';
           const campaignMatch = bodyText.match(/campaign_id:([a-zA-Z0-9-]+)/i);
@@ -186,13 +186,8 @@ export async function GET() {
               create: { name: campaignMatch[1], status: 'active' }
             });
             campaignId = campaign.id;
-          } else {
-            // Try to find the most recent active campaign as fallback
-            const latestCampaign = await prisma.campaign.findFirst({
-              orderBy: { createdAt: 'desc' }
-            });
-            campaignId = latestCampaign?.id || null;
           }
+          // No fallback — if we can't identify the campaign, store as unattributed
 
           await prisma.emailEvent.upsert({
             where: { messageId: messageIdHeader },
