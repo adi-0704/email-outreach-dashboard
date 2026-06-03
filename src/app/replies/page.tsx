@@ -7,7 +7,8 @@ export const revalidate = 0;
 export default async function RepliesPage() {
   const replies = await prisma.emailEvent.findMany({
     where: { type: 'replied' },
-    orderBy: { createdAt: 'desc' }
+    orderBy: { createdAt: 'desc' },
+    include: { campaign: true },
   });
 
   return (
@@ -37,8 +38,11 @@ export default async function RepliesPage() {
               </div>
               <p className="text-gray-300 text-sm mt-2">{reply.snippet}</p>
               <div className="mt-4 flex gap-2">
-                <span className="px-2 py-1 rounded text-xs bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                  {reply.campaignId || "Unknown Campaign"}
+                <span className="px-2 py-1 rounded text-xs bg-blue-500/10 text-blue-400 border border-blue-500/20 capitalize">
+                  {reply.campaign?.name?.replace(/-/g, ' ') || "Unknown Campaign"}
+                </span>
+                <span className="px-2 py-1 rounded text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  Replied
                 </span>
               </div>
             </div>
