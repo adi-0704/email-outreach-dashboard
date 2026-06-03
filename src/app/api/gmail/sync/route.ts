@@ -4,6 +4,26 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+function getEmailBody(payload: any): string {
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/html' && part.body?.data) {
+        return Buffer.from(part.body.data, 'base64url').toString('utf-8');
+      }
+      if (part.mimeType === 'text/plain' && part.body?.data) {
+        return Buffer.from(part.body.data, 'base64url').toString('utf-8');
+      }
+      if (part.parts) {
+        const nestedBody = getEmailBody(part);
+        if (nestedBody) return nestedBody;
+      }
+    }
+  } else if (payload.body?.data) {
+    return Buffer.from(payload.body.data, 'base64url').toString('utf-8');
+  }
+  return '';
+}
+
 export async function GET() {
   try {
     // 1. Get all active connected email accounts
@@ -60,9 +80,10 @@ export async function GET() {
         const messageIdHeader = headers?.find(h => h.name?.toLowerCase() === 'message-id')?.value;
         let campaignIdHeader = headers?.find(h => h.name?.toLowerCase() === 'x-campaign-id')?.value;
         
-        // Fallback: Check body snippet for hidden tracking tag
-        if (!campaignIdHeader && fullMsg.data.snippet) {
-          const match = fullMsg.data.snippet.match(/campaign_id:([a-zA-Z0-9-]+)/i);
+        // Fallback: Check full HTML body for hidden tracking tag
+        if (!campaignIdHeader && fullMsg.data.payload) {
+          const bodyText = getEmailBody(fullMsg.data.payload);
+          const match = bodyText.match(/campaign_id:([a-zA-Z0-9-]+)/i);
           if (match && match[1]) {
             campaignIdHeader = match[1];
           }
