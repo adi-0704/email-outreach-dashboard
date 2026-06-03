@@ -5,66 +5,96 @@ import { PrismaClient } from "@prisma/client";
 import { SyncButton } from "@/components/SyncButton";
 
 const prisma = new PrismaClient();
-
 export const revalidate = 0;
 
 export default async function Dashboard() {
-  // Core counts
-  const totalSent    = await prisma.emailEvent.count({ where: { type: 'sent' } });
-  const totalReplies = await prisma.emailEvent.count({ where: { type: 'replied' } });
-  const hardBounces  = await prisma.emailEvent.count({ where: { type: 'bounced', campaignId: { not: null } } });
-  const softBounces  = await prisma.emailEvent.count({ where: { type: 'delayed' } }); // still being retried
 
-  // Delivery metrics
+  // ─── 1. Run ALL counts in parallel (one round-trip each, not sequential) ───
+  const [
+    totalSent,
+    totalReplies,
+    hardBounces,
+    softBounces,
+    apiUsage,
+    recentReplies,
+    lastEvent,
+    campaigns,
+  ] = await Promise.all([
+    prisma.emailEvent.count({ where: { type: 'sent' } }),
+    prisma.emailEvent.count({ where: { type: 'replied' } }),
+    prisma.emailEvent.count({ where: { type: 'bounced', campaignId: { not: null } } }),
+    prisma.emailEvent.count({ where: { type: 'delayed' } }),
+    prisma.apiUsage.aggregate({ _sum: { cost: true } }),
+    prisma.emailEvent.findMany({
+      where: { type: 'replied' },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: { id: true, subject: true, snippet: true },
+    }),
+    prisma.emailEvent.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    }),
+    // ─── 2. Use _count instead of loading ALL events for campaigns ───
+    prisma.campaign.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        _count: { select: { events: true } },
+        events: {
+          select: { type: true },
+        },
+      },
+    }),
+  ]);
+
+  // ─── 3. Chart: single raw SQL query instead of 21 individual queries ───
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+  sevenDaysAgo.setHours(0, 0, 0, 0);
+
+  const rawChart = await prisma.$queryRaw<
+    { day: Date; type: string; count: bigint }[]
+  >`
+    SELECT 
+      DATE_TRUNC('day', "createdAt") AS day,
+      type,
+      COUNT(*) AS count
+    FROM "EmailEvent"
+    WHERE "createdAt" >= ${sevenDaysAgo}
+      AND type IN ('sent', 'bounced', 'replied')
+    GROUP BY DATE_TRUNC('day', "createdAt"), type
+    ORDER BY day ASC
+  `;
+
+  // Build chart data map
+  const chartMap: Record<string, { sent: number; bounced: number; replied: number }> = {};
+  for (const row of rawChart) {
+    const key = new Date(row.day).toLocaleDateString('en-US', { weekday: 'short' });
+    if (!chartMap[key]) chartMap[key] = { sent: 0, bounced: 0, replied: 0 };
+    if (row.type === 'sent')    chartMap[key].sent    = Number(row.count);
+    if (row.type === 'bounced') chartMap[key].bounced = Number(row.count);
+    if (row.type === 'replied') chartMap[key].replied = Number(row.count);
+  }
+
+  // Ensure all 7 days appear even if no data
+  const chartData = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    const key = d.toLocaleDateString('en-US', { weekday: 'short' });
+    const { sent = 0, bounced = 0, replied = 0 } = chartMap[key] || {};
+    return { date: key, sent, delivered: Math.max(0, sent - bounced), replied };
+  });
+
+  // ─── Derived metrics ───
   const delivered    = Math.max(0, totalSent - hardBounces);
   const deliveryRate = totalSent > 0 ? ((delivered / totalSent) * 100).toFixed(1) : "0.0";
   const bounceRate   = totalSent > 0 ? ((hardBounces / totalSent) * 100).toFixed(1) : "0.0";
   const replyRate    = totalSent > 0 ? ((totalReplies / totalSent) * 100).toFixed(1) : "0.0";
-
-  // API cost
-  const apiUsage  = await prisma.apiUsage.aggregate({ _sum: { cost: true } });
-  const totalCost = apiUsage._sum.cost || 0;
-
-  // Recent replies
-  const recentReplies = await prisma.emailEvent.findMany({
-    where: { type: 'replied' },
-    orderBy: { createdAt: 'desc' },
-    take: 5,
-  });
-
-  // Last 7 days chart — sent + delivered per day
-  const last7Days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    return d;
-  });
-
-  const chartData = await Promise.all(last7Days.map(async (day) => {
-    const start = new Date(day); start.setHours(0, 0, 0, 0);
-    const end   = new Date(day); end.setHours(23, 59, 59, 999);
-
-    const sent     = await prisma.emailEvent.count({ where: { type: 'sent',    createdAt: { gte: start, lte: end } } });
-    const bounced  = await prisma.emailEvent.count({ where: { type: 'bounced', createdAt: { gte: start, lte: end } } });
-    const replied  = await prisma.emailEvent.count({ where: { type: 'replied', createdAt: { gte: start, lte: end } } });
-    const deliveredDay = Math.max(0, sent - bounced);
-
-    return {
-      date: day.toLocaleDateString('en-US', { weekday: 'short' }),
-      sent,
-      delivered: deliveredDay,
-      replied,
-    };
-  }));
-
-  // Campaigns with full delivery breakdown
-  const campaigns = await prisma.campaign.findMany({
-    include: { events: true },
-    orderBy: { createdAt: 'desc' },
-    take: 5,
-  });
-
-  // Last sync time
-  const lastEvent = await prisma.emailEvent.findFirst({ orderBy: { createdAt: 'desc' } });
+  const totalCost    = apiUsage._sum.cost || 0;
 
   return (
     <div className="p-8 pb-20 sm:p-12">
@@ -72,7 +102,8 @@ export default async function Dashboard() {
         <div>
           <h1 className="text-3xl font-bold text-white tracking-tight">Outreach Intelligence</h1>
           <p className="text-muted-foreground mt-1">
-            Real-time performance · Last synced: {lastEvent ? new Date(lastEvent.createdAt).toLocaleString() : 'Never'}
+            Real-time performance · Last synced:{" "}
+            {lastEvent ? new Date(lastEvent.createdAt).toLocaleString() : "Never"}
           </p>
         </div>
         <div className="flex items-center gap-4">
@@ -84,85 +115,39 @@ export default async function Dashboard() {
         </div>
       </header>
 
-      {/* KPI Row */}
+      {/* KPI Row 1 */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-        <KPICard
-          title="Total Sent"
-          value={totalSent.toLocaleString()}
-          trend={0}
-          icon={<Send className="w-5 h-5" />}
-        />
-        <KPICard
-          title="Delivered"
-          value={delivered.toLocaleString()}
-          trend={0}
-          trendLabel={`${deliveryRate}% delivery rate`}
-          icon={<CheckCircle className="w-5 h-5" />}
-        />
-        <KPICard
-          title="Hard Bounced"
-          value={hardBounces.toLocaleString()}
-          trend={0}
-          trendLabel={`${bounceRate}% bounce rate`}
-          trendGoodIfDown={true}
-          icon={<ZapOff className="w-5 h-5" />}
-        />
-        <KPICard
-          title="Soft Bounces"
-          value={softBounces.toLocaleString()}
-          trend={0}
-          trendLabel="retrying · rechecked in 24h"
-          trendGoodIfDown={true}
-          icon={<Clock className="w-5 h-5" />}
-        />
-      </div>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <KPICard
-          title="Replies"
-          value={totalReplies.toLocaleString()}
-          trend={0}
-          trendLabel={`${replyRate}% reply rate`}
-          icon={<Reply className="w-5 h-5" />}
-        />
-        <KPICard
-          title="Delivery Rate"
-          value={`${deliveryRate}%`}
-          trend={0}
-          trendLabel="of sent emails"
-          icon={<Mail className="w-5 h-5" />}
-        />
-        <KPICard
-          title="Reply Rate"
-          value={`${replyRate}%`}
-          trend={0}
-          trendLabel="of sent emails"
-          icon={<Reply className="w-5 h-5" />}
-        />
-        <KPICard
-          title="LLM API Cost"
-          value={`$${totalCost.toFixed(4)}`}
-          trend={0}
-          trendGoodIfDown={true}
-          icon={<CircleDollarSign className="w-5 h-5" />}
-        />
+        <KPICard title="Total Sent"    value={totalSent.toLocaleString()}    trend={0} icon={<Send className="w-5 h-5" />} />
+        <KPICard title="Delivered"     value={delivered.toLocaleString()}     trend={0} trendLabel={`${deliveryRate}% delivery rate`} icon={<CheckCircle className="w-5 h-5" />} />
+        <KPICard title="Hard Bounced"  value={hardBounces.toLocaleString()}   trend={0} trendLabel={`${bounceRate}% bounce rate`} trendGoodIfDown icon={<ZapOff className="w-5 h-5" />} />
+        <KPICard title="Soft Bounces"  value={softBounces.toLocaleString()}   trend={0} trendLabel="retrying · rechecked in 24h" trendGoodIfDown icon={<Clock className="w-5 h-5" />} />
       </div>
 
-      {/* Soft bounce info banner */}
+      {/* KPI Row 2 */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <KPICard title="Delivery Rate" value={`${deliveryRate}%`} trend={0} trendLabel="of sent emails" icon={<Mail className="w-5 h-5" />} />
+        <KPICard title="Reply Rate"    value={`${replyRate}%`}    trend={0} trendLabel="of sent emails" icon={<Reply className="w-5 h-5" />} />
+        <KPICard title="Replies"       value={totalReplies.toLocaleString()} trend={0} icon={<Reply className="w-5 h-5" />} />
+        <KPICard title="LLM API Cost"  value={`$${totalCost.toFixed(4)}`} trend={0} trendGoodIfDown icon={<CircleDollarSign className="w-5 h-5" />} />
+      </div>
+
+      {/* Soft bounce banner */}
       {softBounces > 0 && (
         <div className="mb-6 px-5 py-4 rounded-xl border border-amber-500/20 bg-amber-500/5 flex items-center gap-3">
           <Clock className="w-5 h-5 text-amber-400 shrink-0" />
           <p className="text-sm text-amber-300">
-            <span className="font-semibold">{softBounces} emails</span> are soft bounces (Gmail is retrying delivery). 
-            These will automatically resolve to <span className="text-emerald-400">Delivered</span> or <span className="text-rose-400">Hard Bounced</span> within 24–48 hours as Gmail sends follow-up notifications.
+            <span className="font-semibold">{softBounces} emails</span> are soft bounces — Gmail is retrying delivery.
+            They will auto-resolve to <span className="text-emerald-400">Delivered</span> or{" "}
+            <span className="text-rose-400">Hard Bounced</span> within 24–48 hours.
           </p>
         </div>
       )}
 
+      {/* Chart + Recent Replies */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         <div className="lg:col-span-2">
           <OverviewChart data={chartData} />
         </div>
-
         <div className="glass-card p-6 flex flex-col gap-4">
           <h3 className="font-semibold text-lg text-white">Recent Replies</h3>
           <div className="flex-1 overflow-y-auto space-y-3 pr-1">
@@ -170,7 +155,7 @@ export default async function Dashboard() {
               <p className="text-muted-foreground text-sm">No recent replies found.</p>
             ) : (
               recentReplies.map((reply) => (
-                <div key={reply.id} className="flex items-start justify-between p-3 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors cursor-pointer">
+                <div key={reply.id} className="flex items-start justify-between p-3 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors">
                   <div className="overflow-hidden">
                     <p className="text-sm font-medium text-white truncate">{reply.subject || "No Subject"}</p>
                     <p className="text-xs text-muted-foreground mt-1 truncate">{reply.snippet}</p>
@@ -185,7 +170,7 @@ export default async function Dashboard() {
         </div>
       </div>
 
-      {/* Campaign Performance Table — full delivery breakdown */}
+      {/* Campaign Performance Table */}
       <div className="glass-card p-6">
         <h3 className="font-semibold text-lg text-white mb-6">Campaign Performance</h3>
         <div className="overflow-x-auto">
@@ -206,25 +191,23 @@ export default async function Dashboard() {
               {campaigns.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
-                    No campaign data yet. Sync your emails to get started!
+                    No campaign data yet.
                   </td>
                 </tr>
               ) : (
                 campaigns.map((campaign) => {
-                  const sent       = campaign.events.filter(e => e.type === 'sent').length;
-                  const replied    = campaign.events.filter(e => e.type === 'replied').length;
-                  const hard       = campaign.events.filter(e => e.type === 'bounced').length;
-                  const soft       = campaign.events.filter(e => e.type === 'delayed').length;
-                  const deliveredC = Math.max(0, sent - hard);
-                  const delRate    = sent > 0 ? ((deliveredC / sent) * 100).toFixed(1) : "0.0";
-                  const repRate    = sent > 0 ? ((replied / sent) * 100).toFixed(1) : "0.0";
+                  const sent    = campaign.events.filter(e => e.type === 'sent').length;
+                  const replied = campaign.events.filter(e => e.type === 'replied').length;
+                  const hard    = campaign.events.filter(e => e.type === 'bounced').length;
+                  const soft    = campaign.events.filter(e => e.type === 'delayed').length;
+                  const del     = Math.max(0, sent - hard);
+                  const delRate = sent > 0 ? ((del / sent) * 100).toFixed(1) : "0.0";
+                  const repRate = sent > 0 ? ((replied / sent) * 100).toFixed(1) : "0.0";
                   return (
                     <tr key={campaign.id} className="border-b border-white/5 hover:bg-white/5">
-                      <td className="px-4 py-4 font-medium text-white capitalize">
-                        {campaign.name.replace(/-/g, ' ')}
-                      </td>
+                      <td className="px-4 py-4 font-medium text-white capitalize">{campaign.name.replace(/-/g, ' ')}</td>
                       <td className="px-4 py-4">{sent}</td>
-                      <td className="px-4 py-4 text-emerald-400 font-medium">{deliveredC}</td>
+                      <td className="px-4 py-4 text-emerald-400 font-medium">{del}</td>
                       <td className="px-4 py-4">
                         <span className={`font-semibold ${parseFloat(delRate) >= 90 ? 'text-emerald-400' : parseFloat(delRate) >= 75 ? 'text-amber-400' : 'text-rose-400'}`}>
                           {delRate}%
@@ -242,7 +225,7 @@ export default async function Dashboard() {
           </table>
         </div>
         <p className="text-xs text-muted-foreground mt-4">
-          * Soft bounces are Gmail retries — they resolve automatically within 24–48h. Delivery % = (Sent − Hard Bounces) / Sent.
+          * Delivery % = (Sent − Hard Bounces) / Sent. Soft bounces auto-resolve within 24–48h.
         </p>
       </div>
     </div>
