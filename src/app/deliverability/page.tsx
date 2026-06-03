@@ -4,10 +4,22 @@ import { ShieldAlert } from "lucide-react";
 const prisma = new PrismaClient();
 export const revalidate = 0;
 
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code)));
+}
+
 export default async function DeliverabilityPage() {
   const bounces = await prisma.emailEvent.findMany({
     where: { type: 'bounced' },
-    orderBy: { createdAt: 'desc' }
+    orderBy: { createdAt: 'desc' },
+    include: { campaign: true },
   });
 
   return (
@@ -31,7 +43,7 @@ export default async function DeliverabilityPage() {
               <tr>
                 <th className="px-4 py-3 font-medium">Date</th>
                 <th className="px-4 py-3 font-medium">Subject</th>
-                <th className="px-4 py-3 font-medium">Snippet</th>
+                <th className="px-4 py-3 font-medium">Details</th>
                 <th className="px-4 py-3 font-medium">Campaign</th>
               </tr>
             </thead>
@@ -46,9 +58,17 @@ export default async function DeliverabilityPage() {
                 bounces.map((bounce) => (
                   <tr key={bounce.id} className="border-b border-white/5 hover:bg-white/5">
                     <td className="px-4 py-4 whitespace-nowrap">{bounce.createdAt.toLocaleDateString()}</td>
-                    <td className="px-4 py-4 text-white font-medium">{bounce.subject || "N/A"}</td>
-                    <td className="px-4 py-4">{bounce.snippet}</td>
-                    <td className="px-4 py-4">{bounce.campaignId || "Unknown"}</td>
+                    <td className="px-4 py-4 text-white font-medium max-w-[200px]">
+                      {decodeHtmlEntities(bounce.subject || "N/A")}
+                    </td>
+                    <td className="px-4 py-4 max-w-[380px] leading-relaxed">
+                      {decodeHtmlEntities(bounce.snippet || '')}
+                    </td>
+                    <td className="px-4 py-4">
+                      <span className="px-2 py-1 rounded text-xs bg-rose-500/10 text-rose-400 border border-rose-500/20 capitalize">
+                        {bounce.campaign?.name?.replace(/-/g, ' ') || 'Unknown'}
+                      </span>
+                    </td>
                   </tr>
                 ))
               )}
