@@ -49,7 +49,8 @@ model Lead {
 model EmailEvent {
   id          String   @id @default(cuid())
   messageId   String?  @unique
-  type        String   // sent, delivered, opened, replied, bounced
+  inReplyTo   String?  // Message-ID of the original sent email this is responding to
+  type        String   // sent, delivered, opened, replied, bounced, delayed
   subject     String?
   snippet     String?
   leadId      String?

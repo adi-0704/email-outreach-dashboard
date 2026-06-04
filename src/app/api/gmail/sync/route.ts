@@ -130,37 +130,62 @@ export async function GET() {
         const fullMsg = await gmail.users.messages.get({ userId: 'me', id: msg.id });
         const headers = fullMsg.data.payload?.headers;
 
-        const messageIdHeader = headers?.find(h => h.name?.toLowerCase() === 'message-id')?.value;
-        const inReplyToHeader = headers?.find(h => h.name?.toLowerCase() === 'in-reply-to')?.value;
-        const fromHeader = headers?.find(h => h.name?.toLowerCase() === 'from')?.value || '';
-        const subjectHeader = headers?.find(h => h.name?.toLowerCase() === 'subject')?.value || '';
-
-        // Detect bounce emails from Gmail delivery system
-        const isBounce = 
-          fromHeader.toLowerCase().includes('mailer-daemon') ||
-          fromHeader.toLowerCase().includes('postmaster') ||
-          fromHeader.toLowerCase().includes('mail delivery') ||
-          subjectHeader.toLowerCase().includes('delivery status notification') ||
-          subjectHeader.toLowerCase().includes('delivery failure') ||
-          subjectHeader.toLowerCase().includes('undeliverable') ||
-          subjectHeader.toLowerCase().includes('mail delivery failed') ||
-          subjectHeader.toLowerCase().includes('returned mail');
+        const messageIdHeader  = headers?.find(h => h.name?.toLowerCase() === 'message-id')?.value;
+        const inReplyToHeader  = headers?.find(h => h.name?.toLowerCase() === 'in-reply-to')?.value;
+        const fromHeader       = headers?.find(h => h.name?.toLowerCase() === 'from')?.value || '';
+        const subjectHeader    = headers?.find(h => h.name?.toLowerCase() === 'subject')?.value || '';
 
         if (!messageIdHeader) continue;
 
-        // CASE 1: Bounce/Reply that links back to a sent email we already have in DB
+        // Classify: hard bounce, soft bounce, or reply
+        const isHardBounce =
+          subjectHeader.toLowerCase().includes('delivery status notification (failure)') ||
+          subjectHeader.toLowerCase().includes('delivery failure') ||
+          subjectHeader.toLowerCase().includes('undeliverable') ||
+          subjectHeader.toLowerCase().includes('mail delivery failed') ||
+          subjectHeader.toLowerCase().includes('returned mail') ||
+          ((fromHeader.toLowerCase().includes('mailer-daemon') || fromHeader.toLowerCase().includes('postmaster')) &&
+           !subjectHeader.toLowerCase().includes('delay'));
+
+        const isSoftBounce =
+          subjectHeader.toLowerCase().includes('delivery status notification (delay)') ||
+          (subjectHeader.toLowerCase().includes('delivery status notification') &&
+           subjectHeader.toLowerCase().includes('delay'));
+
+        const isBounce = isHardBounce || isSoftBounce;
+
+        // CASE 1: Linked to a sent email already in DB
         if (inReplyToHeader) {
           const originalEmail = await prisma.emailEvent.findUnique({
             where: { messageId: inReplyToHeader }
           });
 
           if (originalEmail) {
+            if (isHardBounce) {
+              // KEY FIX: If a delayed event already exists for this original email,
+              // upgrade it to bounced instead of creating a duplicate
+              const existingDelayed = await prisma.emailEvent.findFirst({
+                where: { inReplyTo: inReplyToHeader, type: 'delayed' }
+              });
+
+              if (existingDelayed) {
+                // Upgrade the delayed record → bounced (no duplicate)
+                await prisma.emailEvent.update({
+                  where: { id: existingDelayed.id },
+                  data: { type: 'bounced', subject: subjectHeader }
+                });
+                totalSynced++;
+                continue;
+              }
+            }
+
             await prisma.emailEvent.upsert({
               where: { messageId: messageIdHeader },
               update: {},
               create: {
                 messageId: messageIdHeader,
-                type: isBounce ? 'bounced' : 'replied',
+                inReplyTo: inReplyToHeader,
+                type: isHardBounce ? 'bounced' : isSoftBounce ? 'delayed' : 'replied',
                 subject: subjectHeader,
                 snippet: fullMsg.data.snippet || '',
                 accountId: account.id,
@@ -172,8 +197,7 @@ export async function GET() {
           }
         }
 
-        // CASE 2: Standalone bounce from mailer-daemon (no matching sent email yet)
-        // Only link to a campaign if we can find the campaign_id tag in the bounce body
+        // CASE 2: Standalone bounce — only store if we can identify the campaign
         if (isBounce) {
           const bodyText = fullMsg.data.payload ? getEmailBody(fullMsg.data.payload) : '';
           const campaignMatch = bodyText.match(/campaign_id:([a-zA-Z0-9-]+)/i);
@@ -187,14 +211,14 @@ export async function GET() {
             });
             campaignId = campaign.id;
           }
-          // No fallback — if we can't identify the campaign, store as unattributed
 
           await prisma.emailEvent.upsert({
             where: { messageId: messageIdHeader },
             update: {},
             create: {
               messageId: messageIdHeader,
-              type: 'bounced',
+              inReplyTo: inReplyToHeader || null,
+              type: isHardBounce ? 'bounced' : 'delayed',
               subject: subjectHeader,
               snippet: fullMsg.data.snippet || '',
               accountId: account.id,
