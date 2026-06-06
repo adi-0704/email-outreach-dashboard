@@ -10,6 +10,8 @@ const PRICING: Record<string, { input: number; output: number }> = {
   'gemini-1.5-pro':   { input: 1.25  / 1_000_000, output: 5.00 / 1_000_000 },
   'gpt-4o':           { input: 2.50  / 1_000_000, output: 10.0 / 1_000_000 },
   'gpt-4o-mini':      { input: 0.15  / 1_000_000, output: 0.60 / 1_000_000 },
+  'imagen-3':         { input: 0.0,                  output: 0.03 },
+  'imagen-4':         { input: 0.0,                  output: 0.03 },
 };
 
 export async function POST(request: Request) {
