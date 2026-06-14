@@ -5,10 +5,10 @@ export function Sidebar() {
   return (
     <div className="w-64 h-screen border-r border-border bg-black/50 backdrop-blur-xl flex flex-col fixed left-0 top-0">
       <div className="p-6 flex items-center gap-3">
-        <div className="bg-blue-600 p-2 rounded-lg">
+        <div className="bg-emerald-600 p-2 rounded-lg">
           <Zap className="w-5 h-5 text-white" />
         </div>
-        <span className="font-bold text-xl tracking-tight text-white">Antigravity</span>
+        <span className="font-bold text-xl tracking-tight text-white">Wisowl</span>
       </div>
 
       <nav className="flex-1 px-4 space-y-2 mt-4">
