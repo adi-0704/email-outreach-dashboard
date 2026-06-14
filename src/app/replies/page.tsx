@@ -1,7 +1,7 @@
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 import { MessageCircle } from "lucide-react";
+import { MarkAsLeadButton } from "@/components/MarkAsLeadButton";
 
-const prisma = new PrismaClient();
 export const revalidate = 0;
 
 function decodeHtmlEntities(text: string): string {
@@ -19,7 +19,10 @@ export default async function RepliesPage() {
   const replies = await prisma.emailEvent.findMany({
     where: { type: 'replied' },
     orderBy: { createdAt: 'desc' },
-    include: { campaign: true },
+    include: {
+      campaign: true,
+      lead: true,   // ← include linked lead so we can show badge
+    },
   });
 
   return (
@@ -27,11 +30,16 @@ export default async function RepliesPage() {
       <header className="mb-10 flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-white tracking-tight">Inbox</h1>
-          <p className="text-muted-foreground mt-1">All replies and engagements from your campaigns.</p>
+          <p className="text-muted-foreground mt-1">All replies from your campaigns. Mark the good ones as leads.</p>
         </div>
-        <div className="px-4 py-2 rounded-full bg-emerald-500/10 text-emerald-400 text-sm font-medium border border-emerald-500/20 flex items-center gap-2">
-          <MessageCircle className="w-4 h-4" />
-          {replies.length} Replies
+        <div className="flex items-center gap-3">
+          <div className="px-4 py-2 rounded-full bg-emerald-500/10 text-emerald-400 text-sm font-medium border border-emerald-500/20 flex items-center gap-2">
+            <MessageCircle className="w-4 h-4" />
+            {replies.length} Replies
+          </div>
+          <div className="px-4 py-2 rounded-full bg-blue-500/10 text-blue-400 text-sm font-medium border border-blue-500/20">
+            {replies.filter(r => r.leadId).length} Leads
+          </div>
         </div>
       </header>
 
@@ -93,15 +101,11 @@ export default async function RepliesPage() {
 
             </div>
             <p className="text-xs text-gray-500 mt-3">
-              On match → Lead is upserted with status <span className="text-emerald-400 font-medium">interested</span>.
-              Existing leads are never downgraded (e.g. <span className="text-blue-400">booked</span> stays <span className="text-blue-400">booked</span>).
-              The sync response returns <code className="text-gray-300 bg-white/5 px-1 rounded">leadsCreated</code> count.
+              You can also manually promote any reply using the <strong className="text-blue-400">Mark as Lead</strong> button below each reply.
             </p>
           </div>
         </div>
       </div>
-
-
 
       <div className="space-y-4">
         {replies.length === 0 ? (
@@ -110,19 +114,45 @@ export default async function RepliesPage() {
           </div>
         ) : (
           replies.map((reply) => (
-            <div key={reply.id} className="glass-card p-6 flex flex-col gap-2 transition-all hover:bg-white/5">
-              <div className="flex justify-between items-start">
-                <h3 className="font-semibold text-lg text-white">{decodeHtmlEntities(reply.subject || "No Subject")}</h3>
-                <span className="text-xs text-muted-foreground whitespace-nowrap ml-4">{reply.createdAt.toLocaleString()}</span>
+            <div
+              key={reply.id}
+              className={`glass-card p-6 flex flex-col gap-2 transition-all hover:bg-white/5 ${
+                reply.leadId ? 'border-emerald-500/20' : ''
+              }`}
+            >
+              {/* Header row */}
+              <div className="flex justify-between items-start gap-4">
+                <h3 className="font-semibold text-lg text-white leading-snug">
+                  {decodeHtmlEntities(reply.subject || "No Subject")}
+                </h3>
+                <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
+                  {reply.createdAt.toLocaleString()}
+                </span>
               </div>
-              <p className="text-gray-300 text-sm mt-2 leading-relaxed">{decodeHtmlEntities(reply.snippet || '')}</p>
-              <div className="mt-4 flex gap-2">
+
+              {/* Snippet */}
+              <p className="text-gray-300 text-sm mt-1 leading-relaxed">
+                {decodeHtmlEntities(reply.snippet || '')}
+              </p>
+
+              {/* Footer: badges + button */}
+              <div className="mt-4 flex items-center gap-2 flex-wrap">
                 <span className="px-2 py-1 rounded text-xs bg-blue-500/10 text-blue-400 border border-blue-500/20 capitalize">
                   {reply.campaign?.name?.replace(/-/g, ' ') || "Unknown Campaign"}
                 </span>
                 <span className="px-2 py-1 rounded text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                   Replied
                 </span>
+
+                {/* Spacer */}
+                <div className="flex-1" />
+
+                {/* Mark as Lead button (or already-lead badge) */}
+                <MarkAsLeadButton
+                  eventId={reply.id}
+                  isAlreadyLead={!!reply.leadId}
+                  leadEmail={reply.lead?.email ?? null}
+                />
               </div>
             </div>
           ))
