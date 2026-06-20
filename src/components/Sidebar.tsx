@@ -1,14 +1,19 @@
 import Link from "next/link";
-import { LayoutDashboard, Send, Inbox, MessageCircle, BarChart3, Settings, ShieldAlert, Zap } from "lucide-react";
+import Image from "next/image";
+import { LayoutDashboard, Send, Inbox, MessageCircle, BarChart3, Settings, ShieldAlert } from "lucide-react";
 
 export function Sidebar() {
   return (
     <div className="w-64 h-screen border-r border-border bg-black/50 backdrop-blur-xl flex flex-col fixed left-0 top-0">
-      <div className="p-6 flex items-center gap-3">
-        <div className="bg-emerald-600 p-2 rounded-lg">
-          <Zap className="w-5 h-5 text-white" />
-        </div>
-        <span className="font-bold text-xl tracking-tight text-white">Wisowl</span>
+      <div className="px-4 py-5 flex items-center">
+        <Image
+          src="/wisowl-logo-v2.png"
+          alt="WisOwl"
+          width={190}
+          height={52}
+          priority
+          style={{ objectFit: "contain" }}
+        />
       </div>
 
       <nav className="flex-1 px-4 space-y-2 mt-4">
