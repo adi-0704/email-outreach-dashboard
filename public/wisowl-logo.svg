@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 70" fill="none">
+  <!-- Owl Icon -->
+  <g transform="translate(4, 6)">
+    <!-- Body outline -->
+    <path d="M30 8 C18 8 10 16 10 26 C10 36 16 44 24 47 L30 54 L36 47 C44 44 50 36 50 26 C50 16 42 8 30 8Z" stroke="white" stroke-width="2" fill="none"/>
+    <!-- Ears -->
+    <path d="M19 8 L14 2 L22 7" stroke="white" stroke-width="2" fill="none" stroke-linejoin="round"/>
+    <path d="M41 8 L46 2 L38 7" stroke="white" stroke-width="2" fill="none" stroke-linejoin="round"/>
+    <!-- Left eye outer -->
+    <circle cx="22" cy="24" r="6" stroke="white" stroke-width="2" fill="none"/>
+    <!-- Left eye inner -->
+    <circle cx="22" cy="24" r="3" stroke="white" stroke-width="1.5" fill="none"/>
+    <!-- Left eye dot -->
+    <circle cx="22" cy="24" r="1" fill="white"/>
+    <!-- Right eye outer -->
+    <circle cx="38" cy="24" r="6" stroke="white" stroke-width="2" fill="none"/>
+    <!-- Right eye inner -->
+    <circle cx="38" cy="24" r="3" stroke="white" stroke-width="1.5" fill="none"/>
+    <!-- Right eye dot -->
+    <circle cx="38" cy="24" r="1" fill="white"/>
+    <!-- Beak -->
+    <path d="M27 30 L30 34 L33 30 Z" fill="white"/>
+    <!-- Chest detail line -->
+    <path d="M24 47 L36 47" stroke="white" stroke-width="1.5"/>
+  </g>
+
+  <!-- WisOwl Text -->
+  <!-- W -->
+  <text x="62" y="46" font-family="Arial, sans-serif" font-weight="700" font-size="26" fill="white">Wis</text>
+  <!-- Owl in grey -->
+  <text x="112" y="46" font-family="Arial, sans-serif" font-weight="700" font-size="26" fill="#9CA3AF">Owl</text>
+</svg>
